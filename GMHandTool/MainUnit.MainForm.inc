@@ -7,6 +7,7 @@ procedure InitializeComponent;
         self.label1 := new System.Windows.Forms.Label();
         self.SearchBox := new System.Windows.Forms.TextBox();
         self.SaveButton := new System.Windows.Forms.Button();
+        self.ExportButton := new System.Windows.Forms.Button();
         self.LoadButton := new System.Windows.Forms.Button();
         self.SelectFolderBox := new System.Windows.Forms.TextBox();
         self.comboBox1 := new System.Windows.Forms.ComboBox();
@@ -63,6 +64,7 @@ procedure InitializeComponent;
         self.panel1.Controls.Add(self.label1);
         self.panel1.Controls.Add(self.SearchBox);
         self.panel1.Controls.Add(self.SaveButton);
+        self.panel1.Controls.Add(self.ExportButton);
         self.panel1.Controls.Add(self.LoadButton);
         self.panel1.Controls.Add(self.SelectFolderBox);
         self.panel1.Controls.Add(self.comboBox1);
@@ -110,6 +112,17 @@ procedure InitializeComponent;
         self.SaveButton.Text := 'Save BIN';
         self.SaveButton.UseVisualStyleBackColor := true;
         self.SaveButton.Click += SaveButton_Click;
+        // 
+        // ExportButton
+        // 
+        self.ExportButton.Font := new System.Drawing.Font('Verdana', 8);
+        self.ExportButton.Location := new System.Drawing.Point(929, 3);
+        self.ExportButton.Name := 'ExportButton';
+        self.ExportButton.Size := new System.Drawing.Size(87, 25);
+        self.ExportButton.TabIndex := 7;
+        self.ExportButton.Text := 'Export WEB';
+        self.ExportButton.UseVisualStyleBackColor := true;
+        self.ExportButton.Click += ExportButton_Click;
         // 
         // LoadButton
         // 

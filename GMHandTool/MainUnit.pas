@@ -11,6 +11,7 @@ type
     procedure tabControl1_Selected(sender: Object; e: TabControlEventArgs);
     procedure LoadButton_Click(sender: Object; e: EventArgs);
     procedure SaveButton_Click(sender: Object; e: EventArgs);
+    procedure ExportButton_Click(sender: Object; e: EventArgs);
     procedure SearchBox_TextChanged(sender: Object; e: EventArgs);
     procedure SelectFolderBox_TextChanged(sender: Object; e: EventArgs);
     procedure SelectFolderBox_Click(sender: Object; e: EventArgs);
@@ -42,6 +43,7 @@ type
     label1: &Label;
     SearchBox: TextBox;
     SaveButton: Button;
+    ExportButton: Button;
     LoadButton: Button;
     SelectFolderBox: TextBox;
     comboBox1: ComboBox;
@@ -101,6 +103,227 @@ implementation
 
 var
   ColList, RowList: List<string>;
+  StringNodeIndexByParent: Dictionary<string, Dictionary<string, WzNode>>;
+
+function NormalizeID(const RawID: string): string;
+begin
+  Result := RawID;
+  try
+    Result := RawID.IDString;
+  except
+    Result := RawID;
+  end;
+end;
+
+function TrimLeadingZeros(const S: string): string;
+begin
+  Result := S;
+  while (Result <> '') and (Result[1] = '0') do
+    Delete(Result, 1, 1);
+  if Result = '' then
+    Result := '0';
+end;
+
+function PadLeftZeros(const S: string; N: Integer): string;
+begin
+  Result := S;
+  while Length(Result) < N do
+    Result := '0' + Result;
+end;
+
+function IsDigitsOnly(const S: string): Boolean;
+begin
+  Result := S <> '';
+  if not Result then
+    Exit;
+  
+  for var i := 1 to Length(S) do
+    if not Char.IsDigit(S[i]) then
+    begin
+      Result := False;
+      Exit;
+    end;
+end;
+
+function IsStringEntryNode(Node: WzNode): Boolean;
+begin
+  if Node = nil then
+  begin
+    Result := False;
+    Exit;
+  end;
+  
+  Result := (Node.GetNode('name') <> nil) or (Node.GetNode('desc') <> nil) or (Node.GetNode('h1') <> nil) or (Node.GetNode
+    ('bookName') <> nil);
+end;
+
+procedure AddStringIndexKey(Index: Dictionary<string, WzNode>; const Key: string; Node: WzNode);
+begin
+  if (Index = nil) or (Node = nil) or (Key = '') then
+    Exit;
+  
+  if not Index.ContainsKey(Key) then
+    Index.Add(Key, Node);
+  
+  var K2 := NormalizeID(Key);
+  if (K2 <> '') and (not Index.ContainsKey(K2)) then
+    Index.Add(K2, Node);
+  
+  var K3 := TrimLeadingZeros(Key);
+  if (K3 <> '') and (not Index.ContainsKey(K3)) then
+    Index.Add(K3, Node);
+  
+  var K4 := TrimLeadingZeros(K2);
+  if (K4 <> '') and (not Index.ContainsKey(K4)) then
+    Index.Add(K4, Node);
+  
+  if IsDigitsOnly(K2) then
+  begin
+    var K7 := PadLeftZeros(K2, 7);
+    var K8 := PadLeftZeros(K2, 8);
+    if not Index.ContainsKey(K7) then
+      Index.Add(K7, Node);
+    if not Index.ContainsKey(K8) then
+      Index.Add(K8, Node);
+  end;
+end;
+
+function BuildNumericPathKey(Node: WzNode): string;
+begin
+  var Parts := new List<string>;
+  var Cur := Node;
+  while Cur <> nil do
+  begin
+    if IsDigitsOnly(Cur.Text) then
+      Parts.Add(Cur.Text);
+    Cur := Cur.ParentNode;
+  end;
+  
+  Parts.Reverse;
+  Result := string.Join('', Parts.ToArray);
+end;
+
+procedure WalkStringTreeForIndex(Node: WzNode; Index: Dictionary<string, WzNode>);
+begin
+  if Node = nil then
+    Exit;
+  
+  if Node.Value is WzImage then
+  begin
+    var ImgNode := Node.GetValue&<WzImage>;
+    if ImgNode <> nil then
+      ImgNode.TryExtract;
+  end;
+  
+  if IsStringEntryNode(Node) then
+  begin
+    AddStringIndexKey(Index, Node.Text, Node);
+    var PathKey := BuildNumericPathKey(Node);
+    if PathKey <> '' then
+      AddStringIndexKey(Index, PathKey, Node);
+  end;
+  
+  foreach var Child in Node.Nodes do
+    WalkStringTreeForIndex(Child, Index);
+end;
+
+procedure BuildStringIndexForParent(Parent: WzNode);
+begin
+  if Parent = nil then
+    Exit;
+  
+  if StringNodeIndexByParent = nil then
+    StringNodeIndexByParent := new Dictionary<string, Dictionary<string, WzNode>>;
+  
+  var ParentKey := Parent.GetPath;
+  if StringNodeIndexByParent.ContainsKey(ParentKey) then
+    Exit;
+  
+  var Index := new Dictionary<string, WzNode>;
+  WalkStringTreeForIndex(Parent, Index);
+  StringNodeIndexByParent.Add(ParentKey, Index);
+end;
+
+function GetStringNodeFromIndexedParent(Parent: WzNode; const RawID: string): WzNode;
+begin
+  Result := nil;
+  if Parent = nil then
+    Exit;
+  
+  BuildStringIndexForParent(Parent);
+  
+  var ParentKey := Parent.GetPath;
+  if not StringNodeIndexByParent.ContainsKey(ParentKey) then
+    Exit;
+  
+  var Index := StringNodeIndexByParent[ParentKey];
+  var KeyList := new List<string>;
+  KeyList.Add(RawID);
+  var K2 := NormalizeID(RawID);
+  if K2 <> RawID then
+    KeyList.Add(K2);
+  var K3 := TrimLeadingZeros(RawID);
+  if K3 <> RawID then
+    KeyList.Add(K3);
+  var K4 := TrimLeadingZeros(K2);
+  if (K4 <> K2) and (K4 <> RawID) then
+    KeyList.Add(K4);
+  if IsDigitsOnly(K2) then
+  begin
+    KeyList.Add(PadLeftZeros(K2, 7));
+    KeyList.Add(PadLeftZeros(K2, 8));
+  end;
+  
+  foreach var K in KeyList do
+    if Index.ContainsKey(K) then
+    begin
+      Result := Index[K];
+      Exit;
+    end;
+end;
+
+function GetFirstStringNode(params Paths: array of string): WzNode;
+begin
+  Result := nil;
+  if StringWZ = nil then
+    Exit;
+  
+  foreach var P in Paths do
+  begin
+    Result := StringWZ.GetNode(P);
+    if Result <> nil then
+      Exit;
+  end;
+end;
+
+function GetStringNodeByID(Parent: WzNode; const RawID: string): WzNode;
+begin
+  Result := nil;
+  if Parent = nil then
+    Exit;
+  
+  Result := Parent.GetNode(RawID);
+  if Result = nil then
+  begin
+    var ID2 := NormalizeID(RawID);
+    if ID2 <> RawID then
+      Result := Parent.GetNode(ID2);
+  end;
+  
+  if Result = nil then
+    Result := GetStringNodeFromIndexedParent(Parent, RawID);
+end;
+
+function GetStringValueByID(Parent: WzNode; const RawID, FieldName, DefaultValue: string): string;
+begin
+  var N := GetStringNodeByID(Parent, RawID);
+  if (N = nil) and (StringWZ <> nil) and (StringWZ.WzNode <> nil) then
+    N := GetStringNodeByID(StringWZ.WzNode, RawID);
+  if N <> nil then
+    Result := N.GetValue2(FieldName, DefaultValue)
+  else
+    Result := DefaultValue;
+end;
 
 procedure Dump2(Entry: WzNode);
 begin
@@ -142,10 +365,14 @@ begin
   ItemDir := tabControl1.TabPages[TabIndex].Name;
   
   case ItemDir of
-    'Etc': Child := StringWZ.GetNode('Etc.img/Etc');
-    'Install': Child := StringWZ.GetNode('Ins.img');
+    'Cash': Child := GetFirstStringNode('Item.img/Cash', 'Cash.img');
+    'Consume': Child := GetFirstStringNode('Item.img/Con', 'Consume.img', 'Con.img');
+    'Etc': Child := GetFirstStringNode('Item.img/Etc', 'Etc.img/Etc', 'Etc.img');
+    'Install': Child := GetFirstStringNode('Item.img/Ins', 'Ins.img', 'Install.img', 'Item.img/Install', 'Etc.img/Ins',
+      'Etc.img/Install');
+    'Pet': Child := GetFirstStringNode('Item.img/Pet', 'Pet.img');
   else
-    Child := StringWZ.GetNode(ItemDir + '.img');
+    Child := GetFirstStringNode('Item.img/' + ItemDir, ItemDir + '.img', 'Etc.img/' + ItemDir, 'Eqp.img/Eqp/' + ItemDir);
   end;
   
   var ID: string;
@@ -157,8 +384,8 @@ begin
       ID := Img.ImgID;
       if ItemWz.GetNode('Pet/' + img.Text + '/info/iconD') <> nil then
         Icon := ItemWz.GetNode('Pet/' + img.Text + '/info/iconD').ExtractPng2;
-      var Name := Child.GetValue2(ID + '/name', '  ');
-      var Desc := Child.GetValue2(ID + '/desc', '  ');
+      var Name := GetStringValueByID(Child, ID, 'name', '  ');
+      var Desc := GetStringValueByID(Child, ID, 'desc', '  ');
       DumpData2(ItemWz.GetNode('Pet/' + img.Text + '/info'));
       Grid.Rows.Add(ID, Icon, Name, Desc, '');
     end
@@ -167,10 +394,11 @@ begin
       foreach var Iter in ItemWz.GetNodeA(ItemDir + '/' + img.Text).Nodes do
       begin
         DumpData2(Iter);
-        ID := Iter.Text.IDString;
+        ID := Iter.Text;
         if Iter.GetNodeA('info/icon') <> nil then
           Icon := Iter.GetNode('info/icon').ExtractPng2;
-        Grid.Rows.Add(Iter.Text, Icon, Child.GetValue2(ID + '/name', '  '), Child.GetValue2(ID + '/desc', '  '), '');
+        Grid.Rows.Add(Iter.Text, Icon, GetStringValueByID(Child, ID, 'name', '  '), GetStringValueByID(Child, ID, 'desc',
+          '  '), '');
       end;
     end;
   end;
@@ -190,10 +418,13 @@ begin
   end;
   var Child: WzNode;
   case Dir of
-    'Totem': Child := StringWZ.GetNode('Eqp.img/Eqp/Accessory');
-    'TamingMob': Child := StringWZ.GetNode('Eqp.img/Eqp/Taming');
+    'Totem': Child := GetFirstStringNode('Item.img/Eqp/Accessory', 'Eqp.img/Eqp/Accessory', 'Eqp.img/Accessory', 'Accessory.img',
+      'Item.img/Accessory');
+    'TamingMob': Child := GetFirstStringNode('Item.img/Eqp/Taming', 'Eqp.img/Eqp/Taming', 'Eqp.img/Eqp/TamingMob',
+      'Taming.img', 'TamingMob.img', 'Item.img/TamingMob');
   else
-    Child := StringWZ.GetNode('Eqp.img/Eqp/' + Dir);
+    Child := GetFirstStringNode('Item.img/Eqp/' + Dir, 'Eqp.img/Eqp/' + Dir, 'Eqp.img/' + Dir, Dir + '.img',
+      'Item.img/' + Dir);
   end;
   var Row: Integer := -1; 
   var ID, Desc, h1: string;
@@ -225,11 +456,11 @@ begin
           Icon := img.GetNode('info/icon').ExtractPng2;
       end;
     end;
-    ID := img.ImgID.IDString;
-    Desc := Child.GetValue2(ID + '/desc', '');
-    h1 := Child.GetValue2(ID + '/h1', '');
+    ID := img.ImgID;
+    Desc := GetStringValueByID(Child, ID, 'desc', '');
+    h1 := GetStringValueByID(Child, ID, 'h1', '');
     RowList[Row] += ', ' + Desc + h1;
-    Grid.Rows.Add(img.ImgID, Icon, Child.GetValue2(ID + '/name', ''), RowList[Row]);
+    Grid.Rows.Add(img.ImgID, Icon, GetStringValueByID(Child, ID, 'name', ''), RowList[Row]);
   end;
   
   if (Dir = 'TamingMob') and (Skill001Wz <> nil) then
@@ -368,7 +599,11 @@ begin
     else if WzArchive.GetNode(Iter.Text + '/fly/0') <> nil then
       Child := WzArchive.GetNode(Iter.Text + '/fly/0');
     DumpData2(WzArchive.GetNode(Iter.Text));
-    Grid.Rows.Add(Iter.ImgID, Child.ExtractPng2, StringWZ.GetNode('Mob.img/' + Iter.ImgID.IDString).GetValue2('name', ''), '');
+    var MobName := '';
+    var MobStringNode := GetStringNodeByID(StringWZ.GetNode('Mob.img'), Iter.ImgID);
+    if MobStringNode <> nil then
+      MobName := MobStringNode.GetValue2('name', '');
+    Grid.Rows.Add(Iter.ImgID, Child.ExtractPng2, MobName, '');
     var Link := Iter.GetNode('info/link');
     if Link <> nil then
       Links.Add((Link.Value.ToString + '.img', Row));
@@ -698,8 +933,11 @@ begin
       Icon := Entry.GetNode('stand/0').ExtractPng2;
     if Entry.GetNode('default/0') <> nil then
       Icon := Entry.GetNode('default/0').ExtractPng2; 
-    var Name := StringWz.GetNode('Npc.img/' + ID.IDString).GetValue2('name', '');
-    DumpData2(StringWz.GetNode('Npc.img/' + ID.IDString));
+    var NpcStringNode := GetStringNodeByID(StringWz.GetNode('Npc.img'), ID);
+    var Name := '';
+    if NpcStringNode <> nil then
+      Name := NpcStringNode.GetValue2('name', '');
+    DumpData2(NpcStringNode);
     Grid.Rows.Add(ID, Icon, Name, '');
     var Link := Npcwz.GetNode(Img.Text + '/info/link');
     if Link <> nil then
@@ -745,10 +983,13 @@ begin
   begin
     DumpData2(Iter);
     var ID := Iter.Text;
-    if Dict.ContainsKey(Iter.Text.IDString) then
+    var ConsumeID := Iter.Text;
+    if (not Dict.ContainsKey(ConsumeID)) then
+      ConsumeID := NormalizeID(Iter.Text);
+    if Dict.ContainsKey(ConsumeID) then
     begin
-      Name := Dict[Iter.Text.IDString].Item1;
-      Desc := Dict[Iter.Text.IDString].Item2;
+      Name := Dict[ConsumeID].Item1;
+      Desc := Dict[ConsumeID].Item2;
     end;
     if Iter.GetNode('info/icon') <> nil then
       Icon := Iter.GetNode('info/icon').ExtractPng2;
@@ -847,7 +1088,7 @@ begin
     else
       icon := nil;
     
-    var CardName := StringWZ.GetNode('Consume.img/' + CardID).GetValue2('name', '');
+    var CardName := GetStringValueByID(StringWZ.GetNode('Consume.img'), CardID, 'name', '');
     Grid.Rows.Add(ID, MobPic, '', SkillName, SkillDesc, CardID, Icon, CardName);
   end; 
   for var i := 0 to RowList.Count - 1 do
@@ -1112,6 +1353,40 @@ begin
   MessageBox.Show('Save '+Grid.Parent.Name + '.BIN Completed');
 end;
 
+procedure MainForm.ExportButton_Click(sender: Object; e: EventArgs);
+  function HasRows(V: DataViewer): Boolean;
+  begin
+    Result := False;
+    if V = nil then
+      Exit;
+    foreach var R: DataGridViewRow in V.Rows do
+      if not R.IsNewRow then
+      begin
+        Result := True;
+        Exit;
+      end;
+  end;
+begin
+  var BaseDir := System.IO.Path.Combine(System.Environment.CurrentDirectory, 'WEB');
+  var ExportedTabs := 0;
+  var ExportedRows := 0;
+  
+  for var i := 0 to 38 do
+  begin
+    if HasRows(DataGrid[i]) then
+    begin
+      ExportedRows += DataGrid[i].ExportWeb(BaseDir, tabControl1.TabPages[i].Name);
+      ExportedTabs += 1;
+    end;
+  end;
+  
+  if ExportedTabs = 0 then
+    MessageBox.Show('No loaded data to export. Load at least one tab first.')
+  else
+    MessageBox.Show('Export WEB completed: ' + ExportedTabs.ToString + ' tabs, ' + ExportedRows.ToString + ' rows.' + #10 +
+      BaseDir + '\index.html');
+end;
+
 procedure MainForm.SearchBox_TextChanged(sender: Object; e: EventArgs);
 begin
    var SearchStr: string := Trim(SearchBox.Text); 
@@ -1167,6 +1442,7 @@ begin
       NpcWz := new WzStructure;
       MorphWz := new WzStructure;
       StringWz := new WzStructure;
+      StringNodeIndexByParent := nil;
       EtcWz := new WzStructure;
       ReactorWz := new WzStructure;
       
